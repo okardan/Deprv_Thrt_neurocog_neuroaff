@@ -1,0 +1,578 @@
+---
+title: "Threat and Deprivation Groupings Release 4.0"
+author: "Katie McCurry"
+date:  '`r format(Sys.Date(), "%m \ %d \ %Y")`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(tidyverse)
+library(knitr)
+library(readxl)
+library(labelled)
+
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = "html")
+options(knitr.kable.NA = '')
+
+Dir<-getwd()
+
+```
+
+## Used script starting with A_ to import and save data in RDS formats
+```{r Load saved ABCD trauma and demo variables}
+# Note: The RDS files read in here were a compilation of variables saved from raw data from Release 4.0 including the following files:
+# crpbi01.txt, pdem02.txt, abcd_lpds01.txt, dibf01.txt, abcd_lpksad01.txt, abcd_ptsd01.txt, pmq01.txt, abcd_lt01.txt
+
+# read in saved vars and demographic variables
+data0<-readRDS(paste(Dir,"/../data/ABCD_baseline_Release4.Rds",sep=""))
+data1<-readRDS(paste(Dir, "/../data/ABCD_y1_Release4.RDS", sep=""))
+data2<-readRDS(paste(Dir, "/../data/ABCD_y2_Release4.RDS", sep=""))
+
+# merge data
+data <- bind_rows(
+  data0 %>% mutate(timepoint = "Y0"),
+  data1 %>% mutate(timepoint = "Y1"),
+  data2 %>% mutate(timepoint = "Y2")
+)
+
+```
+
+## Calculate Deprivation and Threat Vars for Baseline and Y1/Y2 combined
+```{r Create Emotional Neglect Proxy Vars}
+
+# Emotional Neglect Proxy Variables
+# Create dichotomous variables based on Stinson et al 2021 methodology where responses of 2 or 3 convert to 0 (for not neglectful) and responses of 1 convert to 1 (for potentially neglectful)
+## then following methodology, further collapse the 5 items down to 1 item reflecting dichotomous presence or absence of emotional neglect proxy such that if at least 2 of the 5 recoded items are 1, emotional neglect proxy = 1 and if none or only 1 item is recoded as 1, emotional neglect proxy = 0
+
+# Add variables for dichotomous neglect items 
+data<-data %>%
+  mutate(crpbi_parent1_y_di = case_when(
+    crpbi_parent1_y ==2 ~ 0,
+    crpbi_parent1_y ==3 ~ 0,
+    crpbi_parent1_y ==1 ~ 1),
+  crpbi_parent2_y_di = case_when(
+    crpbi_parent2_y ==2 ~ 0,
+    crpbi_parent2_y ==3 ~ 0,
+    crpbi_parent2_y ==1 ~ 1),
+  crpbi_parent3_y_di = case_when(
+    crpbi_parent3_y ==2 ~ 0,
+    crpbi_parent3_y ==3 ~ 0,
+    crpbi_parent3_y ==1 ~ 1),
+  crpbi_parent4_y_di = case_when(
+    crpbi_parent4_y ==2 ~ 0,
+    crpbi_parent4_y ==3 ~ 0,
+    crpbi_parent4_y ==1 ~ 1),
+  crpbi_parent5_y_di = case_when(
+    crpbi_parent5_y ==2 ~ 0,
+    crpbi_parent5_y ==3 ~ 0,
+    crpbi_parent5_y ==1 ~ 1))
+    
+# create sum score of emotional neglect based on dichotomized 5 crpbi items according to Stinson 2021
+# also create single dichotomous emotional neglect score based on method used in Stinson 2021
+data<-data %>%
+  mutate(crpbi_parent_y_di_sum = case_when(
+     # all missing, make NA
+      rowSums(is.na(across(ends_with("_y_di")))) == 5 ~ NA_real_,
+      # some items missing and sum <= 1, make NA because we don't have all observations to determine it is negative case
+      rowSums(is.na(across(ends_with("_y_di")))) > 0 &
+        rowSums(across(ends_with("_y_di")), na.rm = TRUE) <= 1 ~ NA_real_,
+      # otherwise return actual sum 
+      # note: this allows some items to be missing if positive case criterion is met despite missingness       (i,e., sum >= 2)
+      TRUE ~ rowSums(across(ends_with("_y_di")), na.rm = TRUE)
+    ),
+    crpbi_emoneg_di = case_when(
+      (crpbi_parent_y_di_sum >= 2 & crpbi_parent_y_di_sum <= 5)  ~ TRUE,
+      crpbi_parent_y_di_sum <= 1 ~ FALSE,
+      TRUE ~ NA
+    )
+  )
+  
+
+# Display counts across baseline, Y1, Y2 (note there is no CRPBI administered at Y2)
+data %>% count(timepoint, crpbi_emoneg_di)
+```
+
+# Create dimensional score of Emotional Neglect proxy for sensitivity analyses
+```{r Create Emotional Neglect Proxy dimensional score}
+
+# For sensitivity analyses, instead of dichotomizing as done in Stinson et al 2021, create dimensional score from sum-- reverse scored so that higher scores equal more deprivation
+
+crpbi_items <- c("crpbi_parent1_y", "crpbi_parent2_y", "crpbi_parent3_y", 
+                 "crpbi_parent4_y", "crpbi_parent5_y")
+
+# Count missing patterns before scoring (excluding Year 2 followup)
+n_all_missing <- data %>%
+  filter(eventname != "2_year_follow_up_y_arm_1") %>%
+  mutate(n_missing = rowSums(is.na(across(all_of(crpbi_items))))) %>%
+  summarise(
+    all_missing     = sum(n_missing == 5),
+    partial_missing = sum(n_missing > 0 & n_missing < 5)
+  )
+
+cat("Participants with ALL 5 items missing:", n_all_missing$all_missing, "\n")
+cat("Participants with 1-4 items missing:  ", n_all_missing$partial_missing, "\n")
+
+
+
+data<- data %>%
+  mutate(crpbi_n_missing = rowSums(is.na(across(all_of(crpbi_items)))),
+    crpbi_sum_reverse = case_when(
+      crpbi_n_missing > 0 ~ NA_real_, # if missing any items, make NA 
+      .default = rowSums(across(all_of(crpbi_items), ~ 4 - .x), na.rm = TRUE) # reverse score items so that higher is more deprivation
+    )
+  )
+    
+  
+# Reverse sum score is separated by Baseline and Year 1 timepoint but also make a subject average (if one timepoint is missing, will just be same as score for timepoint that has data available)
+crpbi_bl <- data %>%
+  filter(eventname == "baseline_year_1_arm_1") %>%
+  select(subjectkey, crpbi_bl = crpbi_sum_reverse)
+
+crpbi_y1 <- data %>%
+  filter(eventname == "1_year_follow_up_y_arm_1") %>%
+  select(subjectkey, crpbi_y1 = crpbi_sum_reverse)
+
+# One row per subject with their mean score
+crpbi_mean <- crpbi_bl %>%
+  full_join(crpbi_y1, by = "subjectkey") %>%
+  mutate(
+    crpbi_sum_reverse_mean = rowMeans(cbind(crpbi_bl, crpbi_y1), na.rm = TRUE),
+    crpbi_sum_reverse_mean = ifelse(is.nan(crpbi_sum_reverse_mean), NA_real_, crpbi_sum_reverse_mean)
+  ) %>%
+  select(subjectkey, crpbi_sum_reverse_mean)
+
+remove(crpbi_bl, crpbi_y1)
+
+
+```
+
+```{r physical neglect proxy lack of parental monitoring }
+
+# Physical Neglect Proxy Variables
+# Create dichotomous variables based on Stinson et al 2021 methodology where responses of 3 through 5 convert to 0 (for not neglectful) and responses of 1 or 2 convert to 1 (for potentially neglectful)
+## Based on Breslin et al 2025 paper-- Using the two items that were most commonly cited across ABCD ACEs papers
+
+data<-data %>%
+  mutate(parent_monitor_q1_y_di = case_when(
+    (parent_monitor_q1_y >= 3 & parent_monitor_q1_y <= 5) ~ 0,
+    parent_monitor_q1_y ==1 ~ 1,
+    parent_monitor_q1_y ==2 ~ 1),
+  parent_monitor_q3_y_di = case_when(
+    (parent_monitor_q3_y >= 3 & parent_monitor_q3_y <= 5) ~ 0,
+    parent_monitor_q3_y ==1 ~ 1,
+    parent_monitor_q3_y ==2 ~ 1))
+
+    
+# create sum score of physical neglect proxy based on dichotomized 2 parental monitoring items most cited in ABCD papers according to Breslin paper
+# also create single dichotomous physical neglect score based on method used in Stinson et al 2021 and the two items cited in Breslin et al 2025
+data<-data %>%
+  mutate(parent_monitor_y_di_sum = rowSums(across(c(parent_monitor_q1_y_di, parent_monitor_q3_y_di)), na.rm = TRUE),
+         parent_monitor_physneg_di = case_when(
+           # if both are NA or one NA and one 0 response, make NA because we don't have all observations to determine it is negative case
+           parent_monitor_y_di_sum ==0  &
+             rowSums(is.na(across(c(parent_monitor_q1_y_di, parent_monitor_q3_y_di)))) > 0 ~ NA,
+           # sum is 0 and does not include NAs, make FALSE (negative case)
+           parent_monitor_y_di_sum == 0 ~ FALSE,
+           # sum is 1 or 2, make TRUE (positive case)
+           # note: this allows one item to be missing if other item is positive (i.e., if still meets criterion of at least one positive endorsement)
+           parent_monitor_y_di_sum >= 1 & parent_monitor_y_di_sum <=2 ~ TRUE),
+         # fill in NAs for sum too when there is one item missing and one 0 response
+         parent_monitor_y_di_sum = case_when(parent_monitor_y_di_sum ==0  &
+             rowSums(is.na(across(c(parent_monitor_q1_y_di, parent_monitor_q3_y_di)))) > 0 ~ NA,
+             TRUE ~ parent_monitor_y_di_sum))
+
+# Display counts
+data %>% count(timepoint, parent_monitor_physneg_di)
+```
+
+# Create dimensional physical neglect proxy score for sensitivity analyses
+```{r make dimensional physical neglect proxy score}
+
+# For sensitivity analyses, instead of dichotomizing as done in Stinson et al 2021, create dimensional score from sum-- reverse scored so that higher scores equal more deprivation
+## make continuous score without dichotomizing
+monitor_items <- c("parent_monitor_q1_y", "parent_monitor_q3_y")
+
+# Reverse score and sum 
+data <- data %>%
+  mutate(
+    monitor_n_missing = rowSums(is.na(across(all_of(monitor_items)))),
+    
+    monitor_sum_reverse = case_when(
+      monitor_n_missing > 0 ~ NA_real_,
+      .default = rowSums(across(all_of(monitor_items), ~ 6 - .x), na.rm = TRUE) # reverse scoring so higher is more deprivation
+    )
+  )
+
+# Check missing by timepoints
+monitor_missing <- data %>%
+  mutate(n_missing = rowSums(is.na(across(all_of(monitor_items))))) %>%
+  group_by(eventname) %>%
+  summarise(
+    all_missing     = sum(n_missing == 2),
+    partial_missing = sum(n_missing == 1),
+    .groups = "drop"
+  )
+
+print(monitor_missing)
+
+# Subject-level mean across available timepoints
+monitor_bl <- data %>%
+  filter(eventname == "baseline_year_1_arm_1") %>%
+  select(subjectkey, monitor_bl = monitor_sum_reverse)
+
+monitor_y1 <- data %>%
+  filter(eventname == "1_year_follow_up_y_arm_1") %>%
+  select(subjectkey, monitor_y1 = monitor_sum_reverse)
+
+monitor_y2 <- data %>%
+  filter(eventname == "2_year_follow_up_y_arm_1") %>%
+  select(subjectkey, monitor_y2 = monitor_sum_reverse)
+
+# Average data from available timepoints 
+monitor_mean <- monitor_bl %>%
+  full_join(monitor_y1, by = "subjectkey") %>%
+  full_join(monitor_y2, by = "subjectkey") %>%
+  mutate(
+    monitor_sum_reverse_mean = rowMeans(cbind(monitor_bl, monitor_y1, monitor_y2), na.rm = TRUE),
+    monitor_sum_reverse_mean = ifelse(is.nan(monitor_sum_reverse_mean), NA_real_, monitor_sum_reverse_mean)
+  ) %>%
+  select(subjectkey, monitor_sum_reverse_mean)
+
+remove(monitor_bl,monitor_y1,monitor_y2)
+
+
+```
+
+```{r Financial Insecurity Physical Neglect Proxy}
+
+# Financial Insecurity/Physical Neglect Proxy Variables
+
+# create sum score of proxy of physical neglect due to financial insecurity based on financial items according to Stinson et al 2021 BUT REMOVE the item related to not paying the FULL amount of rent as it isn't clear that that caused physical neglect (versus eviction which is more likely to have)
+# also create single dichotomous potential physical neglect due to financial insecurity score (at least one endorsed item equals positive for physical neglect proxy)
+# note: if they refused to answer items or are missing items, they are able to be included in the positive case (TRUE) if other items were answered and endorsed but they are not able to be included in the negative case because we don't have observations for all items to confirm no endorsements
+
+# check for "refused to answer" coded 777 and replace with NA- 
+data = data %>%
+  mutate(across(starts_with("demo_fam_exp"), ~ na_if(.,777)))
+
+data<-data %>%
+  mutate(
+    demo_fam_exp_v2_sum = case_when(
+    # all items missing/refuse to answer → NA
+    rowSums(is.na(across(c(demo_fam_exp1_v2, demo_fam_exp4_v2, demo_fam_exp5_v2, demo_fam_exp6_v2)))) == 4 ~ NA_real_,
+    # some missing/refuse to answer and sum == 0 → NA
+    rowSums(is.na(across(c(demo_fam_exp1_v2, demo_fam_exp4_v2, demo_fam_exp5_v2, demo_fam_exp6_v2)))) > 0 &
+      rowSums(across(c(demo_fam_exp1_v2, demo_fam_exp4_v2, demo_fam_exp5_v2, demo_fam_exp6_v2)), na.rm = TRUE) == 0 ~ NA_real_,
+    # otherwise, compute the sum normally
+    TRUE ~ rowSums(across(c(demo_fam_exp1_v2, demo_fam_exp4_v2, demo_fam_exp5_v2, demo_fam_exp6_v2)), na.rm = TRUE)
+    ),
+    demo_fam_exp_physneg_fin_di = case_when(
+    demo_fam_exp_v2_sum >= 1 ~ TRUE,
+    demo_fam_exp_v2_sum ==0  ~ FALSE,
+    TRUE ~ NA))
+
+# Display counts
+data %>% count(timepoint, demo_fam_exp_physneg_fin_di)
+```
+
+# Create dimensional score of physical neglect proxy due to financial insecurity for sensitivity analyses
+```{r create dimensional score of financial insecurity physical neglect proxy}
+
+# Dimensional score average across timepoints for sensitivity analysis
+# since items were dichotomous can use sum from previous
+fam_exp_items <- c("demo_fam_exp1_v2", "demo_fam_exp4_v2", 
+                   "demo_fam_exp5_v2", "demo_fam_exp6_v2")
+
+# Missingness
+# Count of NAs per item across all timepoints
+data %>%
+  summarise(across(all_of(fam_exp_items), ~ sum(is.na(.x)))) %>%
+  print()
+
+# Count of subjects with all items NA vs. one or more NA
+fam_exp_missing <- data %>%
+  mutate(n_missing = rowSums(is.na(across(all_of(fam_exp_items))))) %>%
+  summarise(
+    all_missing     = sum(n_missing == 4),
+    any_missing     = sum(n_missing > 0 & n_missing < 4),
+    .groups = "drop"
+  )
+
+cat("All 4 items missing:      ", fam_exp_missing$all_missing, "\n")
+cat("1-3 items missing:        ", fam_exp_missing$any_missing, "\n")
+
+# Subject-level mean across available timepoints 
+fam_exp_bl <- data %>%
+  filter(eventname == "baseline_year_1_arm_1") %>%
+  select(subjectkey, fam_exp_bl = demo_fam_exp_v2_sum)
+
+fam_exp_y1 <- data %>%
+  filter(eventname == "1_year_follow_up_y_arm_1") %>%
+  select(subjectkey, fam_exp_y1 = demo_fam_exp_v2_sum)
+
+fam_exp_y2 <- data %>%
+  filter(eventname == "2_year_follow_up_y_arm_1") %>%
+  select(subjectkey, fam_exp_y2 = demo_fam_exp_v2_sum)
+
+fam_exp_mean <- fam_exp_bl %>%
+  full_join(fam_exp_y1, by = "subjectkey") %>%
+  full_join(fam_exp_y2, by = "subjectkey") %>%
+  mutate(
+    demo_fam_exp_v2_mean = rowMeans(cbind(fam_exp_bl, fam_exp_y1, fam_exp_y2), na.rm = TRUE),
+    demo_fam_exp_v2_mean = ifelse(is.nan(demo_fam_exp_v2_mean), NA_real_, demo_fam_exp_v2_mean)
+  ) %>%
+  select(subjectkey, demo_fam_exp_v2_mean)
+
+remove(fam_exp_bl, fam_exp_y1, fam_exp_y2)
+
+```
+
+```{r calculate dichotomous overall deprivation baseline}
+
+# Create dichotomous overall deprivation
+# NOTE: Have to make custom adjustments for Y2 due to lack of CRPBI data
+
+data<-data %>%
+  mutate(
+    # deprivation dichotomous per timepoint
+    deprivation_dich = case_when(
+      # Y2 special case (CRPBI not collected)
+      timepoint == "Y2" & 
+        (parent_monitor_physneg_di == TRUE | demo_fam_exp_physneg_fin_di == TRUE) ~ 1,
+      timepoint == "Y2" &
+        (parent_monitor_physneg_di == FALSE & demo_fam_exp_physneg_fin_di == FALSE) ~ 0,
+
+      # Y0/Y1 normal rule (all three measures)
+      timepoint != "Y2" &
+        (crpbi_emoneg_di == TRUE | parent_monitor_physneg_di == TRUE | demo_fam_exp_physneg_fin_di == TRUE) ~ 1,
+      timepoint != "Y2" &
+        (crpbi_emoneg_di == FALSE & parent_monitor_physneg_di == FALSE & demo_fam_exp_physneg_fin_di == FALSE) ~ 0,
+      # Otherwise NA (partial missingness)
+      TRUE ~ NA_real_
+    )
+  )
+# NOTE: This allows those with partial missingess and POSITIVE case endorsement on other items to be included as a positive case but only includes those with data from each measure in the negative case group
+    
+# Display counts across timepoints
+data %>% count(timepoint, deprivation_dich)
+```
+
+# Create composite dimensional score for sensitivity analyses
+```{r create composite dimensional score}
+
+# create a df with the three dimensional deprivation scores and then also create a composite score that is z-scored within dimensions and then averaged
+
+deprivation <- crpbi_mean %>%
+  full_join(monitor_mean, by = "subjectkey") %>%
+  full_join(fam_exp_mean, by = "subjectkey") %>%
+  mutate(
+    # Z-score each dimension
+    crpbi_z   = scale(crpbi_sum_reverse_mean)    %>% as.numeric(),
+    monitor_z = scale(monitor_sum_reverse_mean)  %>% as.numeric(),
+    fam_exp_z = scale(demo_fam_exp_v2_mean)      %>% as.numeric(),
+    
+    # Composite: mean of available z-scores (NA only if all three missing)
+    deprivation_composite = rowMeans(cbind(crpbi_z, monitor_z, fam_exp_z), na.rm = TRUE),
+    deprivation_composite = ifelse(is.nan(deprivation_composite), NA_real_, deprivation_composite)
+  ) %>%
+  # Keep subjectkey, raw means, z-scores, and composite
+  select(subjectkey, 
+         crpbi_sum_reverse_mean, monitor_sum_reverse_mean, demo_fam_exp_v2_mean,
+         crpbi_z, monitor_z, fam_exp_z,
+         deprivation_composite)
+
+cat("--- Deprivation composite summary ---\n")
+summary(deprivation %>% select(crpbi_z, monitor_z, fam_exp_z, deprivation_composite))
+
+cat("\n--- NA counts ---\n")
+cat("CRPBI mean missing:              ", sum(is.na(deprivation$crpbi_sum_reverse_mean)), "\n")
+cat("Parental monitoring mean missing:", sum(is.na(deprivation$monitor_sum_reverse_mean)), "\n")
+cat("Financial insecurity mean missing:", sum(is.na(deprivation$demo_fam_exp_v2_mean)), "\n")
+cat("Deprivation composite missing:   ", sum(is.na(deprivation$deprivation_composite)), "\n")
+
+```
+
+```{r Demographics Formatting}
+
+# Sex
+data$Sex<-factor(data$Sex, levels=c("M", "F"), labels = c("Male", "Female"))
+fct_count(data$Sex)
+
+```
+
+```{r Calculate Threat Exposure Proxy}
+
+# Threat Exposure Proxy Variables
+# Add variable for count of number of threat-related events endorsed on KSADS
+data <- data %>%
+  mutate(
+    threat_exp_count = rowSums(across(ksads_ptsd_raw_760_p:ksads_ptsd_raw_769_p), na.rm = TRUE),
+    threat_exp_count = case_when(
+      # All items missing make NA
+      rowSums(!is.na(across(ksads_ptsd_raw_760_p:ksads_ptsd_raw_769_p))) == 0 ~ NA_real_,
+      # Sum is 0 AND at least one missing make NA
+      threat_exp_count == 0 &
+        rowSums(is.na(across(ksads_ptsd_raw_760_p:ksads_ptsd_raw_769_p))) > 0 ~ NA_real_,
+      # otherwise normal sum note: allows inclusion of positive cases if one or more are missing
+      TRUE ~ threat_exp_count
+    )
+  )
+
+# Add variable for binary (yes or no) trauma exposure variable 
+data<-data %>%
+  mutate(threat_exp_yn = case_when(
+    is.na(threat_exp_count) ~ NA,
+    threat_exp_count >= 1 ~ TRUE,
+    threat_exp_count == 0 ~ FALSE))
+
+
+# Display counts across timepoints
+# note: ignore Y1 values for this -- standard timepoints for KSADS admin were baseline and Y2
+data %>% count(timepoint, threat_exp_yn)
+
+```
+
+# For sensivity analyses calculate mean dimensional threat exposure
+```{r make mean dimensional threat exposure}
+
+# make a sum of threat exposures variable and also an average across baseline and Y2
+threat_bl <- data %>%
+  filter(eventname == "baseline_year_1_arm_1") %>%
+  select(subjectkey, threat_bl = threat_exp_count)
+
+threat_y2 <- data %>%
+  filter(eventname == "2_year_follow_up_y_arm_1") %>%
+  select(subjectkey, threat_y2 = threat_exp_count)
+
+threat_mean <- threat_bl %>%
+  full_join(threat_y2, by = "subjectkey") %>%
+  mutate(
+    threat_exp_mean = rowMeans(cbind(threat_bl, threat_y2), na.rm = TRUE),
+    threat_exp_mean = ifelse(is.nan(threat_exp_mean), NA_real_, threat_exp_mean),
+    # Z-score
+    threat_exp_z    = scale(threat_exp_mean) %>% as.numeric()
+  ) %>%
+  select(subjectkey, threat_exp_mean, threat_exp_z)
+
+remove(threat_bl, threat_y2)
+
+cat("--- Threat mean summary ---\n")
+summary(threat_mean %>% select(threat_exp_mean, threat_exp_z))
+cat("Missing threat mean:", sum(is.na(threat_mean$threat_exp_mean)), "\n")
+
+```
+
+
+```{r make groupings}
+
+data_cumul <- data %>%
+  group_by(subjectkey) %>%
+  summarise(
+    # Count whether required waves have NON-MISSING data
+    has_y0_threat = any(timepoint == "Y0" & !is.na(threat_exp_yn)),
+    has_y2_threat = any(timepoint == "Y2" & !is.na(threat_exp_yn)),
+    
+    has_y0_depr = any(timepoint == "Y0" & !is.na(deprivation_dich)),
+    has_y2_depr = any(timepoint == "Y2" & !is.na(deprivation_dich)),
+
+    # CUMULATIVE THREAT
+    threat_cumul = case_when(
+      !has_y0_threat | !has_y2_threat ~ NA,           # required data missing
+      any(threat_exp_yn == TRUE, na.rm = TRUE) ~ TRUE,
+      all(threat_exp_yn == FALSE, na.rm = TRUE) ~ FALSE,
+      TRUE ~ NA
+    ),
+
+    # CUMULATIVE DEPRIVATION
+    depr_cumul = case_when(
+      !has_y0_depr | !has_y2_depr ~ NA,
+      any(deprivation_dich == TRUE, na.rm = TRUE) ~ TRUE,
+      all(deprivation_dich == FALSE, na.rm = TRUE) ~ FALSE,
+      TRUE ~ NA
+    )
+  ) %>%
+  select(subjectkey, threat_cumul, depr_cumul)  
+
+# baseline
+data_y0 <- data %>%
+  filter(timepoint == "Y0") %>%
+  transmute(
+    subjectkey,
+    threat_y0 = threat_exp_yn,
+    depr_y0   = deprivation_dich
+  )
+
+# join and create grouping variables
+data_combined <- data_y0 %>%
+  left_join(data_cumul, by = "subjectkey") %>%
+  mutate(
+    # Baseline grouping
+    threat_dep_both_y0 = case_when(
+      threat_y0 == TRUE  & depr_y0 == TRUE  ~ "Both",
+      threat_y0 == TRUE  & depr_y0 == FALSE ~ "Threat Only",
+      threat_y0 == FALSE & depr_y0 == TRUE  ~ "Deprivation Only",
+      threat_y0 == FALSE & depr_y0 == FALSE ~ "Neither",
+      TRUE ~ NA_character_
+    ),
+
+    # Cumulative grouping
+    threat_dep_both_y1y2 = case_when(
+      threat_cumul == TRUE  & depr_cumul == TRUE  ~ "Both",
+      threat_cumul == TRUE  & depr_cumul == FALSE ~ "Threat Only",
+      threat_cumul == FALSE & depr_cumul == TRUE  ~ "Deprivation Only",
+      threat_cumul == FALSE & depr_cumul == FALSE ~ "Neither",
+      TRUE ~ NA_character_
+    )
+  )
+
+data_combined %>% count(threat_dep_both_y0)
+data_combined %>% count(threat_dep_both_y1y2)
+
+```
+
+# for sensitivity analyses
+```{r create combined data with dimensional scores}
+
+# Combine all dimensional variables into one ELA df
+ela <- data_combined %>%
+  left_join(deprivation, by = "subjectkey") %>%
+  left_join(threat_mean, by = "subjectkey")
+
+cat("--- ELA df dimensions ---\n")
+cat("Rows:", nrow(ela), "| Cols:", ncol(ela), "\n")
+
+cat("\n--- NA counts ---\n")
+cat("Deprivation composite missing: ", sum(is.na(ela$deprivation_composite)), "\n")
+cat("Threat mean missing:           ", sum(is.na(ela$threat_exp_mean)), "\n")
+cat("Threat z-score missing:        ", sum(is.na(ela$threat_exp_z)), "\n")
+cat("Baseline grouping missing:     ", sum(is.na(ela$threat_dep_both_y0)), "\n")
+cat("Cumulative grouping missing:   ", sum(is.na(ela$threat_dep_both_y1y2)), "\n")
+
+# write out csv with continuous variables calculated 
+write.csv(ela, file = paste(Dir, "/../data/ela_dimensional_scores.csv", sep = ""), row.names = FALSE)
+
+
+```
+
+# Write csv with main analysis groupings
+```{r write out groupings}
+
+# Filter to baseline data only and then add back in the grouping variables
+data_y0 <- data %>%  filter(timepoint == "Y0")
+data_y0 <- data_y0 %>%
+  left_join(
+    data_combined %>% select(subjectkey, threat_y0, depr_y0, threat_cumul, depr_cumul, threat_dep_both_y0, threat_dep_both_y1y2),
+    by = "subjectkey"
+  )
+
+# Write out select columns with groupings
+data_out<- data_y0 %>% select(c('subjectkey', 'rel_family_id','Age', 'Sex','threat_dep_both_y0','threat_dep_both_y1y2'))
+
+
+write.csv(data_out, file = paste(Dir,"/../data/Threat_Deprivation_IDs_baseline_Y1Y2_cumulative.csv",sep=""), row.names = FALSE)
+
+```
+
+ 
